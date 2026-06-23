@@ -1,0 +1,9 @@
+project_name: LLP
+default_branch: main
+test_commands:
+  - cd backend && source .venv/bin/activate && pytest
+  - cd frontend && pnpm build
+changelog_file: CHANGELOG.md
+tag_prefix: v
+push_remote: origin
+push_branch: main

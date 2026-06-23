@@ -1,22 +1,15 @@
+import { apiJson, apiPath, jsonHeaders } from "../../shared/api";
 import type { LearningItem, LearningItemCreate, LearningItemType } from "./types";
 
-export const LEARNING_ITEMS_ENDPOINT = "/api/learning-items";
+export const LEARNING_ITEMS_ENDPOINT = apiPath("/learning-items");
 
 export async function createLearningItem(payload: LearningItemCreate): Promise<LearningItem> {
-  const response = await fetch(LEARNING_ITEMS_ENDPOINT, {
+  return apiJson<LearningItem>("/learning-items", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload)
+    headers: jsonHeaders(),
+    body: JSON.stringify(payload),
+    fallbackError: "收藏失败，请稍后重试。"
   });
-
-  if (!response.ok) {
-    const data = await response.json().catch(() => null);
-    throw new Error(data?.detail ?? "收藏失败，请稍后重试。");
-  }
-
-  return response.json();
 }
 
 export async function fetchLearningItems(
@@ -27,23 +20,14 @@ export async function fetchLearningItems(
     type,
     limit: String(limit)
   });
-  const response = await fetch(`${LEARNING_ITEMS_ENDPOINT}?${searchParams.toString()}`);
-
-  if (!response.ok) {
-    const data = await response.json().catch(() => null);
-    throw new Error(data?.detail ?? "读取收藏失败，请稍后重试。");
-  }
-
-  return response.json();
+  return apiJson<LearningItem[]>(`/learning-items?${searchParams.toString()}`, {
+    fallbackError: "读取收藏失败，请稍后重试。"
+  });
 }
 
 export async function deleteLearningItem(id: number): Promise<void> {
-  const response = await fetch(`${LEARNING_ITEMS_ENDPOINT}/${id}`, {
-    method: "DELETE"
+  await apiJson<void>(`/learning-items/${id}`, {
+    method: "DELETE",
+    fallbackError: "删除失败，请稍后重试。"
   });
-
-  if (!response.ok) {
-    const data = await response.json().catch(() => null);
-    throw new Error(data?.detail ?? "删除失败，请稍后重试。");
-  }
 }

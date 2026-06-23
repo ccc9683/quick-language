@@ -3,8 +3,9 @@ import { useEffect, useState } from "react";
 import { deleteLearningItem, fetchLearningItems } from "../features/learning-book/api";
 import type { LearningItem, LearningItemType } from "../features/learning-book/types";
 import TranslateDetailPanel from "../features/translator/TranslateDetailPanel";
-import { TRANSLATE_ENDPOINT } from "../features/translator/api";
-import type { TranslateDetail, TranslateResult } from "../features/translator/types";
+import { translateText } from "../features/translator/api";
+import type { TranslateDetail } from "../features/translator/types";
+import { speakEnglish } from "../shared/speech";
 
 function LearningBookPage() {
   const [activeType, setActiveType] = useState<LearningItemType>("word");
@@ -40,17 +41,14 @@ function LearningBookPage() {
     }
   }
 
-  function speak(text: string) {
-    const englishText = text.trim();
-    if (!englishText || !("speechSynthesis" in window)) {
+  async function speak(text: string) {
+    const result = await speakEnglish(text);
+    if (!result.ok) {
+      setError(result.error);
       return;
     }
 
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(englishText);
-    utterance.lang = "en-US";
-    utterance.rate = 0.95;
-    window.speechSynthesis.speak(utterance);
+    setError("");
   }
 
   return (
@@ -229,19 +227,7 @@ async function fetchWordDetail(sourceText: string): Promise<{
   detail: TranslateDetail;
   phonetic: string | null;
 }> {
-  const response = await fetch(TRANSLATE_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ text: sourceText })
-  });
-
-  if (!response.ok) {
-    throw new Error("Translate request failed.");
-  }
-
-  const result = (await response.json()) as TranslateResult;
+  const result = await translateText(sourceText);
   if (result.kind !== "term" || !result.detail) {
     throw new Error("Translate detail is unavailable.");
   }

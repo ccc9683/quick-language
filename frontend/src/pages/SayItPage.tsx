@@ -9,6 +9,16 @@ import {
   loadInputHistory,
   removeInputHistory
 } from "../shared/inputHistory";
+import { RecordingDiagnosticsPanel } from "../shared/RecordingDiagnosticsPanel";
+import {
+  collectRecordingDiagnostics,
+  getErrorMessage,
+  getErrorName,
+  logRecordingDiagnostics,
+  readMicrophonePermissionState,
+  type RecordingDiagnostics,
+  type RecordingDiagnosticsPatch
+} from "../shared/recordingDiagnostics";
 import {
   createSpeechRecognition,
   isSpeechRecognitionSupported,
@@ -42,14 +52,25 @@ function SayItPage() {
   const [inputFocused, setInputFocused] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(false);
+  const [recordingDiagnostics, setRecordingDiagnostics] = useState<RecordingDiagnostics>(() =>
+    collectRecordingDiagnostics({ recordingState: "idle", stage: "say_it_init" })
+  );
+  const [showRecordingDiagnostics, setShowRecordingDiagnostics] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const recognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const recordingDiagnosticsRef = useRef<RecordingDiagnostics | null>(null);
   const inputAreaRef = useRef<HTMLDivElement | null>(null);
+
+  if (recordingDiagnosticsRef.current === null) {
+    recordingDiagnosticsRef.current = recordingDiagnostics;
+  }
 
   const showHistoryButton = inputFocused || historyMenuOpen;
 
   useEffect(() => {
     setSpeechSupported(isSpeechRecognitionSupported());
+    updateRecordingDiagnostics({ recordingState: "idle", stage: "say_it_page_loaded" });
+    void refreshMicrophonePermission("say_it_permission_query");
 
     return () => {
       recognitionRef.current?.abort();
@@ -70,6 +91,22 @@ function SayItPage() {
       document.removeEventListener("pointerdown", handleDocumentPointerDown);
     };
   }, []);
+
+  function updateRecordingDiagnostics(patch: RecordingDiagnosticsPatch): RecordingDiagnostics {
+    const diagnostics = collectRecordingDiagnostics({
+      ...(recordingDiagnosticsRef.current ?? recordingDiagnostics),
+      ...patch
+    });
+    recordingDiagnosticsRef.current = diagnostics;
+    setRecordingDiagnostics(diagnostics);
+    logRecordingDiagnostics("say-it", diagnostics);
+    return diagnostics;
+  }
+
+  async function refreshMicrophonePermission(stage: string): Promise<void> {
+    const permissionState = await readMicrophonePermissionState();
+    updateRecordingDiagnostics({ permissionState, stage });
+  }
 
   async function sendRequest(text: string, clarification?: string) {
     const trimmed = text.trim();
@@ -108,7 +145,7 @@ function SayItPage() {
       }
 
       if (response.english_text) {
-        speak(response.english_text);
+        void speak(response.english_text, false);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Say it 请求失败，请稍后重试。");
@@ -165,37 +202,109 @@ function SayItPage() {
 
   function startRecording() {
     if (!speechSupported || isRecording) {
+      if (!speechSupported) {
+        const message = "当前浏览器不支持 Web Speech Recognition，请使用 Chrome 或 Edge。";
+        setError(message);
+        updateRecordingDiagnostics({
+          recordingState: "error",
+          stage: "speech_recognition_unsupported",
+          lastErrorName: "SpeechRecognitionUnsupported",
+          lastErrorMessage: message
+        });
+      }
       return;
+    }
+
+    updateRecordingDiagnostics({
+      recordingState: "starting",
+      stage: "say_it_start_clicked",
+      startError: "",
+      stopError: "",
+      lastErrorName: "",
+      lastErrorMessage: "",
+      blobSize: null,
+      audioDurationMs: null
+    });
+
+    if (!window.isSecureContext) {
+      updateRecordingDiagnostics({
+        recordingState: "starting",
+        stage: "secure_context_warning",
+        lastErrorName: "InsecureContext",
+        lastErrorMessage:
+          "当前页面不是 HTTPS/安全上下文，浏览器可能会阻止麦克风或语音识别。"
+      });
     }
 
     const recognition = createSpeechRecognition({
       lang: "zh-CN",
-      onResult: (transcript) => setInputText(transcript),
-      onError: () => {
+      onResult: (transcript) => {
+        setInputText(transcript);
+        updateRecordingDiagnostics({
+          recordingState: "ready",
+          stage: "say_it_result",
+          lastErrorName: "",
+          lastErrorMessage: ""
+        });
+      },
+      onError: (errorCode) => {
         setIsRecording(false);
-        setError("语音识别失败，请重试。");
+        const message = getSpeechRecognitionFailureMessage(errorCode);
+        setError(message);
+        updateRecordingDiagnostics({
+          permissionState: isSpeechRecognitionPermissionDenied(errorCode) ? "denied" : undefined,
+          recordingState: "error",
+          stage: isSpeechRecognitionPermissionDenied(errorCode)
+            ? "permission_denied"
+            : "speech_recognition_error",
+          lastErrorName: errorCode || "SpeechRecognitionError",
+          lastErrorMessage: message
+        });
       },
       onEnd: () => {
         setIsRecording(false);
         recognitionRef.current = null;
+        const currentRecordingState = recordingDiagnosticsRef.current?.recordingState;
+        updateRecordingDiagnostics({
+          recordingState:
+            currentRecordingState === "error" || currentRecordingState === "ready"
+              ? currentRecordingState
+              : "idle",
+          stage: "say_it_end"
+        });
       }
     });
 
     if (!recognition) {
       setSpeechSupported(false);
+      updateRecordingDiagnostics({
+        recordingState: "error",
+        stage: "speech_recognition_unsupported",
+        lastErrorName: "SpeechRecognitionUnsupported",
+        lastErrorMessage: "SpeechRecognition constructor is unavailable"
+      });
       return;
     }
 
     recognitionRef.current = recognition;
     setError("");
     setIsRecording(true);
+    updateRecordingDiagnostics({ recordingState: "recording", stage: "say_it_recording" });
 
     try {
       recognition.start();
-    } catch {
+    } catch (err) {
       recognitionRef.current = null;
       setIsRecording(false);
-      setError("语音识别启动失败，请重试。");
+      const message = getErrorMessage(err);
+      setError(`语音识别启动失败：${message}`);
+      updateRecordingDiagnostics({
+        recordingState: "error",
+        stage: "start_error",
+        startError: message,
+        lastErrorName: getErrorName(err),
+        lastErrorMessage: message
+      });
     }
   }
 
@@ -204,27 +313,51 @@ function SayItPage() {
       return;
     }
 
+    updateRecordingDiagnostics({ recordingState: "stopping", stage: "say_it_stopping" });
+
     try {
       recognitionRef.current?.stop();
-    } catch {
+    } catch (err) {
+      const message = getErrorMessage(err);
       recognitionRef.current = null;
+      setError(`停止语音识别异常：${message}`);
+      updateRecordingDiagnostics({
+        recordingState: "error",
+        stage: "stop_error",
+        stopError: message,
+        lastErrorName: getErrorName(err),
+        lastErrorMessage: message
+      });
     }
     setIsRecording(false);
   }
 
-  function speak(text = result?.english_text ?? "") {
+  async function speak(text = result?.english_text ?? "", showFailure = true) {
     const englishText = text.trim();
-    if (!englishText) {
+    if (englishText) {
+      setIsSpeaking(true);
+    }
+
+    const speechResult = await speakEnglish(englishText, {
+      onEnd: () => setIsSpeaking(false),
+      onError: (message) => {
+        setIsSpeaking(false);
+        if (showFailure) {
+          setError(message);
+        }
+      }
+    });
+
+    if (!speechResult.ok) {
+      setIsSpeaking(false);
+      if (showFailure) {
+        setError(speechResult.error);
+      }
       return;
     }
 
-    setIsSpeaking(true);
-    const started = speakEnglish(englishText, {
-      onEnd: () => setIsSpeaking(false),
-      onError: () => setIsSpeaking(false)
-    });
-    if (!started) {
-      setIsSpeaking(false);
+    if (showFailure) {
+      setError("");
     }
   }
 
@@ -291,7 +424,19 @@ function SayItPage() {
         </div>
 
         {!speechSupported && (
-          <div className="notice">当前浏览器不支持语音识别，请使用 Chrome 或 Edge。</div>
+          <div className="notice">{getSayItUnsupportedMessage(recordingDiagnostics)}</div>
+        )}
+
+        <button
+          className="secondary diagnostics-toggle"
+          onClick={() => setShowRecordingDiagnostics((visible) => !visible)}
+          type="button"
+        >
+          {showRecordingDiagnostics ? "隐藏录音诊断" : "显示录音诊断"}
+        </button>
+
+        {showRecordingDiagnostics && (
+          <RecordingDiagnosticsPanel diagnostics={recordingDiagnostics} title="Say It 录音诊断" />
         )}
 
         <div className="actions">
@@ -311,15 +456,15 @@ function SayItPage() {
             }}
             type="button"
           >
-            {isRecording ? "停止录音" : "🎤 开始录音"}
+            {isRecording ? "停止录音" : "开始录音"}
           </button>
           <button
             className="secondary"
             disabled={!result?.english_text}
-            onClick={() => speak()}
+            onClick={() => void speak()}
             type="button"
           >
-            🔊 朗读
+            朗读
           </button>
           <button
             className="danger"
@@ -327,7 +472,7 @@ function SayItPage() {
             onClick={stopSpeaking}
             type="button"
           >
-            ⏹ 停止
+            停止
           </button>
         </div>
 
@@ -405,4 +550,36 @@ function buildClarifiedText(state: ClarificationState | null, selectedOption: st
   }
 
   return state.originalText;
+}
+
+function getSayItUnsupportedMessage(diagnostics: RecordingDiagnostics): string {
+  if (!diagnostics.isSecureContext) {
+    return "当前页面不是 HTTPS/安全上下文，手机浏览器通常会阻止麦克风。请通过 HTTPS 或 localhost 访问。";
+  }
+
+  return "当前浏览器不支持 Web Speech Recognition，请使用 Chrome 或 Edge，或在 Partner 中使用录音上传。";
+}
+
+function getSpeechRecognitionFailureMessage(errorCode: string): string {
+  if (isSpeechRecognitionPermissionDenied(errorCode)) {
+    return "麦克风权限被拒绝，请在浏览器地址栏或系统设置中允许麦克风后重试。";
+  }
+
+  if (errorCode === "audio-capture") {
+    return "没有找到可用麦克风，请检查设备麦克风或系统权限。";
+  }
+
+  if (errorCode === "network") {
+    return "浏览器语音识别服务连接失败，请检查网络或改用 Partner 录音上传。";
+  }
+
+  if (errorCode === "no-speech") {
+    return "没有检测到语音，请靠近麦克风再试一次。";
+  }
+
+  return `语音识别失败：${errorCode || "unknown"}`;
+}
+
+function isSpeechRecognitionPermissionDenied(errorCode: string): boolean {
+  return errorCode === "not-allowed" || errorCode === "service-not-allowed";
 }

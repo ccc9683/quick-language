@@ -3,6 +3,8 @@ name: llp-release
 description: Use when the user asks to publish, release, push, deploy, or uses Chinese trigger words like “发布”, “推送”, “来人”, “来人啊”, or “来啊” for the LLP project. Defaults to a two-step guarded LLP release workflow in /home/titie/projects/LLP: Codex runs local build/test/commit only, then the user runs finish in their WSL terminal to push main and tag.
 ---
 
+已迁移到全局 `~/.agents/skills/project-release`。保留此文件仅作为 LLP 旧发布流程备份；新发布请求优先使用全局 `project-release` Skill，并读取仓库根目录 `.release.yaml`。
+
 # LLP Release
 
 Use this skill only for the LLP repository at `/home/titie/projects/LLP`.

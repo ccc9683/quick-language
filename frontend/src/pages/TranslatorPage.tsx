@@ -3,13 +3,14 @@ import type { MouseEvent } from "react";
 
 import { createLearningItem } from "../features/learning-book/api";
 import TranslateDetailPanel from "../features/translator/TranslateDetailPanel";
-import { TRANSLATE_ENDPOINT } from "../features/translator/api";
+import { translateText } from "../features/translator/api";
 import type { TranslateResult } from "../features/translator/types";
 import {
   addInputHistory,
   loadInputHistory,
   removeInputHistory
 } from "../shared/inputHistory";
+import { speakEnglish, stopSpeaking } from "../shared/speech";
 
 const INPUT_HISTORY_STORAGE_KEY = "llp_translator_input_history";
 
@@ -50,9 +51,7 @@ function TranslatorPage() {
   }, []);
 
   function cancelSpeech() {
-    if ("speechSynthesis" in window) {
-      window.speechSynthesis.cancel();
-    }
+    stopSpeaking();
   }
 
   function abortTranslate(reason: "clear" | "stop") {
@@ -83,21 +82,7 @@ function TranslatorPage() {
     setFavoriteNotice("");
 
     try {
-      const response = await fetch(TRANSLATE_ENDPOINT, {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ text: input })
-      });
-
-      if (!response.ok) {
-        const data = await response.json().catch(() => null);
-        throw new Error(data?.detail ?? "翻译失败，请稍后重试。");
-      }
-
-      setResult(await response.json());
+      setResult(await translateText(input, controller.signal));
       setInputHistory(addInputHistory(INPUT_HISTORY_STORAGE_KEY, input));
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
@@ -118,17 +103,14 @@ function TranslatorPage() {
     }
   }
 
-  function handleSpeak() {
-    const input = text.trim();
-    if (!input || !("speechSynthesis" in window)) {
+  async function handleSpeak() {
+    const result = await speakEnglish(text);
+    if (!result.ok) {
+      setError(result.error);
       return;
     }
 
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(input);
-    utterance.lang = "en-US";
-    utterance.rate = 0.95;
-    window.speechSynthesis.speak(utterance);
+    setError("");
   }
 
   function handleClear() {
